@@ -1,0 +1,162 @@
+# AgentFrame — Agent 专用上下文保持框架
+
+**脑 = DeepSeek · 手 = 工具执行 · 记忆 = 四层上下文保持**
+
+版本 1.0.0 · GPL-3.0 · Cloud LTE Studio
+
+---
+
+## 🏗️ 架构
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    ContextEngine 引擎                    │
+│  ┌─────────┐  ┌──────────────┐  ┌───────────┐  ┌──────┐ │
+│  │ L1 认知  │→ │ L2 路由      │→ │ L3 存储    │→ │ L4 物理│ │
+│  │ MetaCog │  │LandmarkRouter│  │AbsorbedMLA│  │KVPager│ │
+│  │任务分解  │  │ landmark检索 │  │ 吸收式MLA  │  │三级换页│ │
+│  │信息缺口  │  │ 分层软max    │  │ INT4量化   │  │遗忘曲线│ │
+│  └─────────┘  └──────────────┘  └───────────┘  └──────┘ │
+│         ↕ 检索指令      ↕ 摘要        ↕ 压缩块   ↕ 热度    │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │  LLM Provider (DeepSeek, 支持 thinking+工具循环)  │   │
+│  │  Embedding Provider (哈希/API, 文本→向量)          │   │
+│  └──────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────┘
+```
+
+## ✨ 核心能力
+
+| 能力 | 说明 | 验证状态 |
+|------|------|---------|
+| **KV 压缩** | 吸收式 MLA + INT4 = **35.6x** (270KB→7.6KB/token) | ✅ L40S 实测 |
+| **Top-K 保护** | 关键块 16bit + 其余 4bit = **0/100 翻转** | ✅ 实测 |
+| **分层组织** | Sector(16)-Block(256)-Module(1024) 硬件对齐 | ✅ |
+| **Aura 遗忘** | S(t)=I·2^(-t/τ) 指数遗忘 + 访问增强 | ✅ |
+| **脑+手** | function calling 工具循环, Agent 自验证代码 | ✅ 讨论室实测 |
+| **多会话** | 每会话独立引擎, 状态可持久化 | ✅ |
+
+## 🚀 快速开始
+
+### 1. 安装
+
+```bash
+pip install -e /root/.openclaw/workspace/agentframe
+# 或直接用 (无需安装):
+export PYTHONPATH=/root/.openclaw/workspace
+```
+
+### 2. 配置
+
+```bash
+export AGENTFRAME_API_KEY="sk-xxx"          # DeepSeek key
+export AGENTFRAME_MODEL="deepseek-v4-pro"    # 主模型
+export AGENTFRAME_FAST_MODEL="deepseek-v4-flash"
+export AGENTFRAME_PORT=8090
+
+# 或生成配置文件
+python3 -m agentframe.cli config
+```
+
+### 3. CLI 使用
+
+```bash
+# 摄入知识
+python3 -m agentframe.cli ingest "KV 压缩 35.6x 实测" --tags "kv"
+
+# 查询 (带 DeepSeek 生成)
+python3 -m agentframe.cli ask "KV 压缩多少倍？"
+
+# 状态 / 遗忘
+python3 -m agentframe.cli stats
+python3 -m agentframe.cli forget --threshold 0.1
+
+# 离线演示 (无需 API key)
+python3 -m agentframe.cli demo
+```
+
+### 4. REST API
+
+```bash
+python3 -m agentframe.api.server 8090
+```
+
+```bash
+# 创建会话
+SID=$(curl -s -X POST http://localhost:8090/v1/sessions | jq -r .session_id)
+
+# 摄入知识
+curl -X POST http://localhost:8090/v1/sessions/$SID/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"text":"吸收式 MLA 缓存 576 维潜在向量","tags":["method"]}'
+
+# 查询+生成
+curl -X POST http://localhost:8090/v1/sessions/$SID/ask \
+  -H "Content-Type: application/json" \
+  -d '{"query":"MLA 怎么压缩 KV？","chat":true}'
+
+# 带工具循环查询 (Agent 可执行代码验证)
+curl -X POST http://localhost:8090/v1/sessions/$SID/ask_hands \
+  -H "Content-Type: application/json" \
+  -d '{"query":"验证 dict 合并操作符 | 的语义"}'
+
+# 状态 / 遗忘 / 持久化
+curl http://localhost:8090/v1/sessions/$SID/stats
+curl -X POST http://localhost:8090/v1/sessions/$SID/forget -d '{"threshold":0.1}'
+curl -X POST http://localhost:8090/v1/sessions/$SID/save
+```
+
+### 5. Python 库方式
+
+```python
+from agentframe.config import AgentFrameConfig
+from agentframe.core.engine import ContextEngine
+
+cfg = AgentFrameConfig.from_env()
+eng = ContextEngine(cfg)
+
+eng.ingest("AgentFrame KV 压缩 35.6x", ["kv"])
+result = eng.ask("KV 压缩多少倍？")
+print(result.answer)          # DeepSeek 回答
+print(result.retrieved)       # 检索到的知识块
+eng.save("/tmp/state.json")   # 持久化
+```
+
+## 📁 项目结构
+
+```
+agentframe/
+├── __init__.py          # 版本 + 导出
+├── config.py            # 配置系统 (env/JSON)
+├── core/
+│   ├── quad.py          # 四层核心 (KV/分层/路由/分页/认知)
+│   └── engine.py        # ContextEngine 主引擎
+├── llm/                 # LLM Provider (deepseek/mock)
+├── embed/               # Embedding Provider (hash/api)
+├── memory/              # 持久化 (JSON 快照)
+├── api/server.py        # REST API v1 (多会话)
+├── cli.py               # 命令行工具
+├── tests/               # 核心测试 (离线)
+└── deploy/              # systemd 服务
+```
+
+## 🔬 关键技术 (实测数据)
+
+1. **吸收式 MLA**: 只缓存 576 维潜在向量 (512 kv_lora + 64 k_pe), 不展开 KV
+   - 270KB → 30.4KB (8.9x) → INT8 15.2KB → **INT4 7.6KB (35.6x)**
+2. **Top-K 自适应精度保护**: 路由层已知 Top-K → 关键块 16bit + 其余 4bit
+   - 1bit 符号补偿 ❌ (17/50 翻转) / 排序保护 ❌ (29/100) / **Top-K 块 16bit ✅ (0/100)**
+3. **Sector-Block-Module**: 16 token=Sector, 16 Sector=Block(256), 4 Block=Module(1024)
+   - 结构做骨架 / 价值做决策 / 粒度分层
+4. **Aura 遗忘曲线**: S(t) = I·2^(-t/τ) + log2(access+1)×0.1
+5. **注意力分数 ≠ 任务重要性** (3-Agent 讨论室 v3 产出):
+   - Agent 场景 L2 验证必须用任务感知权重 (工具名/参数键/错误码), 非注意力分数
+   - 蒙特卡洛模拟: 95.22% 概率按注意力采样误删首轮关键 token
+
+## 📜 许可证
+
+GPL-3.0 © Cloud LTE Studio
+
+---
+
+*AgentFrame · 脑手一体 · 上下文永不丢失*
